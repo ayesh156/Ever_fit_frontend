@@ -1,5 +1,4 @@
 import React from 'react';
-import { formatCurrency } from '../lib/utils';
 
 const formatPrice = (n: number) => `Rs. ${n.toLocaleString('en-LK')}`;
 

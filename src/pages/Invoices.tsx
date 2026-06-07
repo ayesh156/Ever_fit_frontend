@@ -9,7 +9,7 @@ import {
   FileText, Search, Plus, Eye, Edit, Trash2,
   CheckCircle, List, SortAsc, SortDesc, LayoutGrid,
   User, XCircle, CircleDollarSign,
-  ChevronLeft, ChevronRight, ChevronDown, ChevronsLeft, ChevronsRight,
+  ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight,
   Clock, X, Barcode, Package,
   CreditCard, Phone, Mail, Filter, Calendar,
   Printer, MessageCircle, History, Send, Download,
@@ -259,7 +259,6 @@ export const Invoices: React.FC = () => {
   const [editNotes, setEditNotes] = useState('');
   const [editItems, setEditItems] = useState<InvoiceItem[]>([]);
   const [showEditDueCal, setShowEditDueCal] = useState(false);
-  const [statusDropdownOpen, setStatusDropdownOpen] = useState(false);
   const [showReceiptPreview, setShowReceiptPreview] = useState(false);
   const [previewUrl, setPreviewUrl] = useState('');
   const [downloadOrderId, setDownloadOrderId] = useState('');
@@ -1330,8 +1329,6 @@ export const Invoices: React.FC = () => {
       {/* ─── RECEIPT PREVIEW MODAL ─── */}
       {showReceiptPreview && previewUrl && (() => {
         const isPdf = previewUrl.toLowerCase().endsWith('.pdf');
-        const ext = previewUrl.includes('.') ? previewUrl.substring(previewUrl.lastIndexOf('.')) : '';
-        const orderId = selectedInvoice?.id;
         return (
           <div className="fixed inset-0 z-[200] flex items-center justify-center" onClick={() => setShowReceiptPreview(false)}>
             <div className="absolute inset-0 bg-black/70 backdrop-blur-sm" />

@@ -4,7 +4,7 @@ import { useTheme } from '../../contexts/ThemeContext';
 import { get, post } from '../../lib/api';
 import { io } from 'socket.io-client';
 import { toast } from 'sonner';
-import { ArrowLeft, Search, Package, Clock, CheckCircle, XCircle, Loader, Upload, Eye } from 'lucide-react';
+import { ArrowLeft, Search, Clock, CheckCircle, XCircle, Loader, Upload } from 'lucide-react';
 
 const formatPrice = (n: number) => `Rs. ${n.toLocaleString('en-LK')}`;
 
