@@ -9,6 +9,24 @@ import { toast } from 'sonner';
 
 const formatPrice = (n: number) => `Rs. ${n.toLocaleString('en-LK')}`;
 
+const getRenderUrl = (path: string | null | undefined): string => {
+  if (!path) return '/placeholder.png';
+  if (path.startsWith('blob:') || /^https?:\/\//i.test(path)) return path;
+  const cleanPath = path.replace(/^\/+/, '');
+  const baseUrl = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '').replace(/\/+$/, '');
+  return `${baseUrl}/${cleanPath}`;
+};
+
+// Resolve a raw image path (relative /uploads/... or absolute URL) to a renderable URL
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api')
+  .replace(/\/api\/?$/, '')
+  .replace(/\/+$/, '');
+const resolveUrl = (raw: string | null | undefined): string | null => {
+  if (!raw || !raw.trim()) return null;
+  if (raw.startsWith('blob:') || raw.startsWith('data:') || /^https?:\/\//i.test(raw)) return raw;
+  return `${API_BASE}/${raw.replace(/^\/+/, '')}`;
+};
+
 const STANDARD_COLORS: Record<string, string> = {
   'Black': '#000000', 'White': '#FFFFFF', 'Navy': '#001F3F', 'Red': '#E53E3E',
   'Blue': '#3B82F6', 'Grey': '#9CA3AF', 'Brown': '#92400E', 'Cream': '#FFFDD0',
@@ -66,7 +84,9 @@ export const ProductDetail: React.FC = () => {
   if (product) {
     const imgSet = new Set<string>();
     if (product.image) imgSet.add(product.image as string);
-    if (product.images) product.images.forEach((img: any) => { if (img.imageData) imgSet.add(img.imageData as string); });
+    if (product.images) product.images.forEach((img: any) => { if (img.imageUrl) imgSet.add(img.imageUrl as string); });
+    // Also include images[0] from the sorted list as fallback
+    if (imgSet.size === 0 && product.images?.[0]?.imageUrl) imgSet.add(product.images[0].imageUrl);
     imgSet.forEach(i => allImages.push(i));
   }
 
@@ -137,10 +157,10 @@ export const ProductDetail: React.FC = () => {
           >
             {allImages.length > 0 ? (
               <>
-                <img src={allImages[selectedImageIdx]} alt={product.name} className="w-full aspect-square lg:aspect-[4/5] object-cover" />
+                <img src={getRenderUrl(allImages[selectedImageIdx])} alt={product.name} className="w-full aspect-square lg:aspect-[4/5] object-cover" />
                 {zoom.show && (
                   <div className="absolute inset-0 pointer-events-none">
-                    <img src={allImages[selectedImageIdx]} alt="" className="w-[200%] h-[200%] max-w-none max-h-none" style={{ transform: `translate(-${zoom.x}%, -${zoom.y}%)` }} />
+                    <img src={getRenderUrl(allImages[selectedImageIdx])} alt="" className="w-[200%] h-[200%] max-w-none max-h-none" style={{ transform: `translate(-${zoom.x}%, -${zoom.y}%)` }} />
                   </div>
                 )}
               </>
@@ -155,7 +175,7 @@ export const ProductDetail: React.FC = () => {
               {allImages.map((img, idx) => (
                 <button key={idx} onClick={() => setSelectedImageIdx(idx)}
                   className={`w-16 h-16 rounded-lg overflow-hidden border-2 flex-shrink-0 transition-all ${idx === selectedImageIdx ? 'border-brand-600 ring-1 ring-brand-600' : dark ? 'border-neutral-700' : 'border-gray-200'}`}>
-                  <img src={img} alt="" className="w-full h-full object-cover" />
+                  <img src={getRenderUrl(img)} alt="" className="w-full h-full object-cover" />
                 </button>
               ))}
             </div>
@@ -292,7 +312,7 @@ export const ProductDetail: React.FC = () => {
             <button onClick={e => { e.stopPropagation(); setLightboxIdx(i => Math.min(allImages.length - 1, i + 1)); }} className="absolute right-4 z-10 p-2 rounded-full bg-white/10 text-white hover:bg-white/20"><ChevronRight className="w-6 h-6" /></button>
           )}
           <div className="max-w-4xl max-h-[90vh] p-4" onClick={e => e.stopPropagation()}>
-            {allImages[lightboxIdx] && <img src={allImages[lightboxIdx]} alt="" className="max-w-full max-h-[85vh] object-contain" />}
+            {allImages[lightboxIdx] && <img src={getRenderUrl(allImages[lightboxIdx])} alt="" className="max-w-full max-h-[85vh] object-contain" />}
           </div>
           <div className="absolute bottom-4 text-white/60 text-xs">{lightboxIdx + 1} / {allImages.length}</div>
         </div>

@@ -43,7 +43,7 @@ interface ApiProduct {
   category: ApiCategory;
   variants: ApiVariant[];
   reviews: ApiReview[];
-  images: { imageData: string; order: number }[];
+  images: { imageUrl?: string; order: number }[];
   createdAt: string;
 }
 
@@ -88,7 +88,7 @@ function mapProduct(p: ApiProduct): MappedProduct {
     id: String(p.id),
     name: p.name,
     category: p.category.name,
-    image: p.image || 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=600&q=80',
+    image: p.images?.[0]?.imageUrl || p.image || 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=600&q=80',
     price: p.price,
     sizes,
     colors,

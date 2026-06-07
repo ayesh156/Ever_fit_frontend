@@ -16,6 +16,16 @@ const formatPrice = (n: number) => `Rs. ${n.toLocaleString('en-LK')}`;
 const PLACEHOLDER_IMG = 'https://images.unsplash.com/photo-1441986300917-64674bd600d8?w=500&q=80';
 const handleImgError = (e: React.SyntheticEvent<HTMLImageElement>) => { e.currentTarget.src = PLACEHOLDER_IMG; };
 
+// Resolve a raw image path (relative /uploads/... or absolute URL) to a renderable URL
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api')
+  .replace(/\/api\/?$/, '')
+  .replace(/\/+$/, '');
+const resolveUrl = (raw: string | null | undefined): string => {
+  if (!raw || !raw.trim()) return PLACEHOLDER_IMG;
+  if (raw.startsWith('blob:') || raw.startsWith('data:') || /^https?:\/\//i.test(raw)) return raw;
+  return `${API_BASE}/${raw.replace(/^\/+/, '')}`;
+};
+
 const priceRanges = [
   { label: 'Under Rs. 1,000', min: 0, max: 1000 },
   { label: 'Rs. 1,000 - Rs. 3,000', min: 1000, max: 3000 },
@@ -76,7 +86,7 @@ export const ShopPage: React.FC = () => {
             stock: (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0),
             lowStockThreshold: 10,
             status: 'in-stock' as const,
-            image: p.image || undefined,
+            image: resolveUrl(p.images?.[0]?.imageUrl || p.image || null),
             createdAt: p.createdAt || new Date().toISOString(),
           };
         });
@@ -192,7 +202,7 @@ export const ShopPage: React.FC = () => {
                 selectedCategory === cat.name
                   ? dark ? 'text-black/50' : 'text-white/60'
                   : dark ? 'text-neutral-600' : 'text-gray-400'
-              }`}>{cat._count.products}</span>
+              }`}>{cat._count?.products ?? 0}</span>
             </button>
           ))}
         </div>

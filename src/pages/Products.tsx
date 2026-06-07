@@ -111,6 +111,11 @@ interface ReviewRow {
   rating: number;
 }
 
+interface ProductImageState {
+  id?: number;
+  imageUrl: string;       // blob: data: https: or server relative path
+}
+
 const inputClass = (dark: boolean) => `w-full px-3 py-2 rounded-xl border text-sm transition-all ${dark ? 'bg-neutral-800/50 border-neutral-700/50 text-white placeholder-neutral-500 focus:border-white/30' : 'bg-white border-gray-200 text-gray-900 placeholder-gray-400 focus:border-gray-400'}`;
 const labelClass = (dark: boolean) => `block text-xs font-medium mb-1.5 ${dark ? 'text-neutral-400' : 'text-gray-500'}`;
 
@@ -242,6 +247,13 @@ export const Products: React.FC = () => {
         get<any[]>('/categories'),
       ]);
       setCategories(catData.map((c: any) => ({ id: c.id, name: c.name })));
+      const apiBase = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '').replace(/\/+$/, '');
+      const resolveImage = (rawPath: string | null | undefined): string | undefined => {
+        if (!rawPath || !rawPath.trim()) return undefined;
+        if (rawPath.startsWith('blob:') || rawPath.startsWith('data:') || /^https?:\/\//i.test(rawPath)) return rawPath;
+        const cleanPath = rawPath.replace(/^\/+/, '');
+        return `${apiBase}/${cleanPath}`;
+      };
       const mapped: Product[] = prodData.map((p: any) => ({
         id: String(p.id),
         sku: p.variants?.[0]?.sku || `SKU-${p.id}`,
@@ -258,7 +270,7 @@ export const Products: React.FC = () => {
         stock: (p.variants || []).reduce((sum: number, v: any) => sum + (v.stock || 0), 0),
         lowStockThreshold: 10,
         status: 'in-stock' as Product['status'],
-        image: p.image || undefined,
+        image: resolveImage(p.images?.[0]?.imageUrl || p.image),
         createdAt: p.createdAt || new Date().toISOString(),
       }));
       setProducts(mapped);
@@ -275,8 +287,50 @@ export const Products: React.FC = () => {
   useEffect(() => { fetchAll(); }, [fetchAll]);
   useEffect(() => { setCurrentPage(1); }, [itemsPerPage]);
 
-  const addImage = (img: string) => setFormImages(prev => [...prev, img]);
-  const removeImage = (idx: number) => setFormImages(prev => prev.filter((_, i) => i !== idx));
+  const apiBase = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api').replace(/\/api\/?$/, '').replace(/\/+$/, '');
+  const getRenderUrl = (rawPath: string | null | undefined): string => {
+    if (!rawPath || !rawPath.trim()) return '/placeholder.png';
+    // Pass-through: blob previews, base64 data URIs, and absolute web URLs
+    if (rawPath.startsWith('blob:') || rawPath.startsWith('data:') || /^https?:\/\//i.test(rawPath)) return rawPath;
+    // Strip any leading slashes so we never produce a double-slash when joining
+    const cleanPath = rawPath.replace(/^\/+/, '');
+    return `${apiBase}/${cleanPath}`;
+  };
+  const addImage = (img: string) => {
+    // If it's a File object (from drag/drop), create an Object URL for live preview
+    setFormImages(prev => [...prev, img]);
+  };
+  const removeImage = (idx: number) => {
+    const removed = formImages[idx];
+    // Revoke blob URLs to prevent memory leaks
+    if (removed?.startsWith('blob:')) URL.revokeObjectURL(removed);
+    setFormImages(prev => prev.filter((_, i) => i !== idx));
+  };
+  const deleteImageApi = async (imgUrl: string, productId: string) => {
+    // Unsaved images (data:, blob:) — remove from local state only, no API call
+    if (imgUrl.startsWith('data:') || imgUrl.startsWith('blob:')) {
+      removeImageByUrl(imgUrl);
+      return;
+    }
+    try {
+      const dbId = productId.replace(/[^0-9]/g, '');
+      const productData = await get<any>(`/products/${dbId}`);
+      const matched = (productData.images || []).find((i: any) => i.imageUrl === imgUrl);
+      if (matched) {
+        await del(`/products/${dbId}/images/${matched.id}`);
+        toast.success('Image deleted');
+        if (selectedProduct) openEditModal(selectedProduct);
+      } else {
+        removeImageByUrl(imgUrl);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete image');
+    }
+  };
+  const removeImageByUrl = (imgUrl: string) => {
+    if (imgUrl?.startsWith('blob:')) URL.revokeObjectURL(imgUrl);
+    setFormImages(prev => prev.filter(i => i !== imgUrl));
+  };
 
   const resetForm = () => {
     setFormName('');
@@ -312,10 +366,12 @@ export const Products: React.FC = () => {
       setFormVariants(dbVariants.map((v: any) => ({ key: `v-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, size: v.size, color: v.color, sku: v.sku, stock: Number(v.stock || 0) })));
       const dbReviews = productData.reviews || [];
       setFormReviews(dbReviews.map((r: any) => ({ key: `r-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, reviewerName: r.reviewerName, reviewerPhoto: r.reviewerPhoto || '', description: r.description || '', rating: r.rating || 5 })));
-      // Load images — strict deduplication via Set
-      const legacyImg = productData.image;
-      const imgArr: string[] = (productData.images || []).map((img: any) => img.imageData as string);
-      if (legacyImg) { imgArr.unshift(legacyImg as string); }
+      // Load images — map imageUrl field (from ProductImage model), preserve sort order
+      const legacyImg = productData.image as string | null;
+      const imgArr: string[] = (productData.images || [])
+        .map((img: any) => img.imageUrl as string)
+        .filter(Boolean);
+      if (legacyImg && !imgArr.includes(legacyImg)) { imgArr.unshift(legacyImg); }
       setFormImages([...new Set(imgArr)]);
       setShowAllImages(false);
     } catch {
@@ -325,37 +381,70 @@ export const Products: React.FC = () => {
     setShowEditModal(true);
   };
 
+  const dataUrlToBlob = (dataUrl: string): Blob | null => {
+    try {
+      const parts = dataUrl.split(',');
+      if (parts.length < 2) return null;
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+      const byteString = atob(parts[1]);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      return new Blob([ab], { type: mime });
+    } catch { return null; }
+  };
+
   const handleSaveProduct = async (isEdit: boolean) => {
     if (!formName.trim()) { toast.error('Product name required'); return; }
     if (!formPrice || parseFloat(formPrice) <= 0) { toast.error('Valid price required'); return; }
     setSaving(true);
     try {
-      const payload = {
-        name: formName,
-        description: formDescription || undefined,
-        price: Number(parseFloat(formPrice)),
-        image: formImages[0] || null,
-        images: formImages,
-        categoryId: Number(formCategoryId),
-        variants: formVariants.map((v, idx) => ({
-          size: v.size || 'FREE', color: v.color || 'Default',
-          sku: v.sku || `EVF-${(formName || 'PROD').slice(0, 3).toUpperCase()}-${(v.size || 'XX').toUpperCase()}-${(v.color || 'XX').toUpperCase()}-${Date.now()}-${idx}`,
-          stock: Number(v.stock || 0),
-        })),
-        reviews: formReviews.map(r => ({
-          reviewerName: r.reviewerName || 'Anonymous',
-          reviewerPhoto: r.reviewerPhoto || null,
-          description: r.description || null,
-          rating: Number(r.rating) || 5,
-        })),
-      };
+      const formData = new FormData();
+      formData.append('name', formName);
+      formData.append('description', formDescription || '');
+      formData.append('price', String(Number(parseFloat(formPrice))));
+      formData.append('categoryId', String(Number(formCategoryId)));
+      formData.append('variants', JSON.stringify(formVariants.map((v, idx) => ({
+        size: v.size || 'FREE', color: v.color || 'Default',
+        sku: v.sku || `EVF-${(formName || 'PROD').slice(0, 3).toUpperCase()}-${(v.size || 'XX').toUpperCase()}-${(v.color || 'XX').toUpperCase()}-${Date.now()}-${idx}`,
+        stock: Number(v.stock || 0),
+      }))));
+      formData.append('reviews', JSON.stringify(formReviews.map(r => ({
+        reviewerName: r.reviewerName || 'Anonymous',
+        reviewerPhoto: r.reviewerPhoto || null,
+        description: r.description || null,
+        rating: Number(r.rating) || 5,
+      }))));
+      // --- Images ---
+      // 1. data: URLs → convert to Blob and append as multipart files under 'imageFiles'
+      // 2. http(s):// or /uploads/... URLs → send as JSON array under 'imageUrls'
+      // 3. blob: URLs are temp previews — skip (they haven't been persisted yet and
+      //    the ImageUpload component always produces data: URLs)
+      const newFileImages: string[] = [];
+      const existingUrlImages: string[] = [];
+      for (const img of formImages) {
+        if (img.startsWith('data:')) {
+          newFileImages.push(img);
+        } else if (img.startsWith('blob:')) {
+          // skip — ephemeral, not persistable
+        } else {
+          existingUrlImages.push(img);
+        }
+      }
+      for (let i = 0; i < newFileImages.length; i++) {
+        const blob = dataUrlToBlob(newFileImages[i]);
+        if (blob) formData.append('imageFiles', blob, `prod-img-${Date.now()}-${i}.jpg`);
+      }
+      formData.append('imageUrls', JSON.stringify(existingUrlImages));
+
       if (isEdit && selectedProduct) {
         const dbId = selectedProduct.id.replace(/[^0-9]/g, '');
-        await put(`/products/${dbId}`, payload);
+        await put(`/products/${dbId}`, formData);
         toast.success('Product updated');
         setShowEditModal(false);
       } else {
-        await post('/products', payload);
+        await post('/products', formData);
         toast.success('Product created');
         setShowAddModal(false);
       }
@@ -412,13 +501,16 @@ export const Products: React.FC = () => {
                 {!showAllImages && formImages.length >= 4 ? (
                   <>
                     {formImages.slice(0, 3).map((img, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border group">
-                        <img src={img} alt="" className="w-full h-full object-cover rounded-md" />
-                        <button onClick={() => removeImage(idx)} className="absolute top-1 right-1 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"><X className="w-3.5 h-3.5" /></button>
+                      <div key={`img-collapse-${idx}`} className="relative aspect-square rounded-lg overflow-hidden border group">
+                        <img src={getRenderUrl(img)} alt="" className="w-full h-full object-cover rounded-md" />
+                        {showEditModal && selectedProduct && (
+                          <button onClick={() => deleteImageApi(img, selectedProduct.id)} className="absolute top-1 right-1 p-1 rounded-full bg-red-600/80 text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Delete image from server"><Trash2 className="w-3 h-3" /></button>
+                        )}
+                        <button onClick={() => removeImage(idx)} className={`absolute top-1 ${showEditModal ? 'left-1' : 'right-1'} p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity`}><X className="w-3.5 h-3.5" /></button>
                       </div>
                     ))}
                     <div className="relative aspect-square rounded-lg overflow-hidden border group cursor-pointer" onClick={() => setShowAllImages(true)}>
-                      <img src={formImages[3]} alt="" className="w-full h-full object-cover rounded-md" />
+                      <img src={getRenderUrl(formImages[3])} alt="" className="w-full h-full object-cover rounded-md" />
                       <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
                         <span className="text-white text-lg font-bold">+{formImages.length - 3} more</span>
                       </div>
@@ -428,9 +520,12 @@ export const Products: React.FC = () => {
                   /* Expanded OR fewer than 4 images: show all + upload at end */
                   <>
                     {formImages.map((img, idx) => (
-                      <div key={idx} className="relative aspect-square rounded-lg overflow-hidden border group">
-                        <img src={img} alt="" className="w-full h-full object-cover rounded-md" />
-                        <button onClick={() => removeImage(idx)} className="absolute top-1 right-1 p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity"><X className="w-3.5 h-3.5" /></button>
+                      <div key={`img-${idx}`} className="relative aspect-square rounded-lg overflow-hidden border group">
+                        <img src={getRenderUrl(img)} alt="" className="w-full h-full object-cover rounded-md" />
+                        {showEditModal && selectedProduct && (
+                          <button onClick={() => deleteImageApi(img, selectedProduct.id)} className="absolute top-1 right-1 p-1 rounded-full bg-red-600/80 text-white opacity-0 group-hover:opacity-100 transition-opacity" title="Delete image from server"><Trash2 className="w-3 h-3" /></button>
+                        )}
+                        <button onClick={() => removeImage(idx)} className={`absolute top-1 ${showEditModal ? 'left-1' : 'right-1'} p-1 rounded-full bg-black/60 text-white opacity-0 group-hover:opacity-100 transition-opacity`}><X className="w-3.5 h-3.5" /></button>
                       </div>
                     ))}
                     <ImageUpload value={undefined} onChange={val => { if (val) addImage(val); }} dark={dark} className="aspect-square rounded-lg border-2 border-dashed overflow-hidden cursor-pointer w-full h-full [&>div]:h-full [&>div]:py-0 [&>div]:gap-1 [&>div]:border-0 [&_svg]:w-5 [&_svg]:h-5 [&_p]:text-[10px] [&_p]:leading-tight" />

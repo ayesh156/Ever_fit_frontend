@@ -1,15 +1,15 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useTheme } from '../contexts/ThemeContext';
 import { formatCurrency, formatDate } from '../lib/utils';
+import { get, del, put, post } from '../lib/api';
+import { toast } from 'sonner';
 import {
-  mockCustomers as initialCustomers,
   CUSTOMER_TYPES,
-  type Customer,
   type CustomerType,
+  type Customer,
   type CustomerPayment,
   type CustomerReminder,
 } from '../data/mockData';
-import { toast } from 'sonner';
 import { DeleteConfirmationModal } from '../components/modals/DeleteConfirmationModal';
 import { SearchableComboBox, type ComboBoxOption } from '../components/ui/SearchableComboBox';
 import { ImageUpload } from '../components/ui/ImageUpload';
@@ -90,7 +90,49 @@ export const Customers: React.FC = () => {
   const dark = theme === 'dark';
 
   // ─── State ───
-  const [customers, setCustomers] = useState<Customer[]>(initialCustomers);
+  const [customers, setCustomers] = useState<Customer[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [cities, setCities] = useState<string[]>([]);
+
+  // Fetch customers & cities from API on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const [customerData, cityData] = await Promise.all([
+          get<any[]>('/customers').catch(() => [] as any[]),
+          get<any[]>('/cities').catch(() => [] as any[]),
+        ]);
+        // Map API response to Customer interface
+        const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+        const mapped: Customer[] = customerData.map((c: any) => ({
+          id: `c-${c.id}`,
+          name: c.name,
+          phone: c.phone || '',
+          email: c.email || '',
+          address: c.address || '',
+          city: c.city || 'Unknown',
+          image: c.photoUrl ? (c.photoUrl.startsWith('/uploads/') ? `${apiBase}${c.photoUrl}` : c.photoUrl) : undefined,
+          customerType: 'Regular' as CustomerType,
+          totalPurchases: c.totalOrders || 0,
+          totalSpent: 0,
+          outstandingBalance: c.outstandingBalance || 0,
+          loyaltyPoints: 0,
+          nic: c.nic || '',
+          notes: c.notes || '',
+          status: 'active' as const,
+          joinedDate: c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        }));
+        setCustomers(mapped);
+        setCities(cityData.map((city: any) => city.name));
+      } catch (err) {
+        console.error('[Customers] Failed to fetch:', err);
+        toast.error('Failed to load data');
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchData();
+  }, []);
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
@@ -148,7 +190,6 @@ export const Customers: React.FC = () => {
   const [formImage, setFormImage] = useState<string | undefined>();
   const [formNotes, setFormNotes] = useState('');
   const [formNic, setFormNic] = useState('');
-  const [formLoyaltyPoints, setFormLoyaltyPoints] = useState('');
 
   const gridPerPageOptions = [6, 9, 12, 18];
   const tablePerPageOptions = [5, 10, 20, 50];
@@ -157,7 +198,7 @@ export const Customers: React.FC = () => {
   useEffect(() => { setItemsPerPage(viewMode === 'list' ? 10 : 6); }, [viewMode]);
 
   // ─── Derived data ───
-  const cities = useMemo(() => [...new Set(customers.map(c => c.city))].sort(), [customers]);
+  const cityList = useMemo(() => [...new Set(customers.map(c => c.city))].sort(), [customers]);
 
   const activeFilterCount = [
     statusFilter !== 'all' ? 1 : 0,
@@ -223,7 +264,7 @@ export const Customers: React.FC = () => {
   ];
 
   const cityOptions: ComboBoxOption[] = useMemo(() =>
-    cities.map(c => ({ value: c, label: c })), [cities]);
+    (cities.length > 0 ? cities : cityList).map(c => ({ value: c, label: c })), [cities, cityList]);
 
   // ─── Form helpers ───
   const resetForm = useCallback(() => {
@@ -231,7 +272,6 @@ export const Customers: React.FC = () => {
     setFormAddress(''); setFormCity(''); setFormCustomerType('Regular');
     setFormOutstandingBalance(''); setFormStatus('active');
     setFormImage(undefined); setFormNotes(''); setFormNic('');
-    setFormLoyaltyPoints('');
   }, []);
 
   const openAddModal = () => { resetForm(); setShowAddModal(true); };
@@ -243,51 +283,95 @@ export const Customers: React.FC = () => {
     setFormCustomerType(c.customerType);
     setFormOutstandingBalance(c.outstandingBalance.toString()); setFormStatus(c.status);
     setFormImage(c.image); setFormNotes(c.notes || ''); setFormNic(c.nic || '');
-    setFormLoyaltyPoints(c.loyaltyPoints.toString());
     setShowEditModal(true);
   };
 
-  const handleSaveCustomer = (isEdit: boolean) => {
+  // Converts a data URL (base64 image) to a Blob for FormData upload
+  const dataUrlToBlob = (dataUrl: string): Blob | null => {
+    try {
+      const parts = dataUrl.split(',');
+      if (parts.length < 2) return null;
+      const mimeMatch = parts[0].match(/:(.*?);/);
+      const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+      const byteString = atob(parts[1]);
+      const ab = new ArrayBuffer(byteString.length);
+      const ia = new Uint8Array(ab);
+      for (let i = 0; i < byteString.length; i++) ia[i] = byteString.charCodeAt(i);
+      return new Blob([ab], { type: mime });
+    } catch {
+      return null;
+    }
+  };
+
+  const handleSaveCustomer = async (isEdit: boolean) => {
     if (!formName.trim()) { toast.error('Customer name required'); return; }
     if (!formPhone.trim()) { toast.error('Phone number required'); return; }
 
-    if (isEdit && selectedCustomer) {
-      setCustomers(prev => prev.map(c => c.id === selectedCustomer.id ? {
-        ...c,
-        name: formName, phone: formPhone,
-        email: formEmail, address: formAddress, city: formCity || 'Unknown',
-        customerType: formCustomerType,
-        outstandingBalance: parseFloat(formOutstandingBalance) || 0,
-        status: formStatus, image: formImage, notes: formNotes || undefined,
-        nic: formNic || undefined,
-        loyaltyPoints: parseInt(formLoyaltyPoints) || 0,
-      } : c));
-      setShowEditModal(false);
-      toast.success('Customer updated', { description: formName });
-    } else {
-      const newCustomer: Customer = {
-        id: `c-${Date.now()}`,
-        name: formName, phone: formPhone,
-        email: formEmail, address: formAddress, city: formCity || 'Unknown',
-        customerType: formCustomerType,
-        totalPurchases: 0, totalSpent: 0,
-        outstandingBalance: parseFloat(formOutstandingBalance) || 0,
-        loyaltyPoints: parseInt(formLoyaltyPoints) || 0,
-        status: formStatus, image: formImage, notes: formNotes || undefined,
-        nic: formNic || undefined,
-        joinedDate: new Date().toISOString().split('T')[0],
-      };
-      setCustomers(prev => [newCustomer, ...prev]);
-      setShowAddModal(false);
-      toast.success('Customer added', { description: formName });
+    try {
+      // Build FormData to support file upload + all text fields
+      const formData = new FormData();
+      formData.append('name', formName.trim());
+      formData.append('phone', formPhone.trim());
+      formData.append('email', (formEmail || '').trim());
+      formData.append('address', (formAddress || '').trim());
+      formData.append('city', (formCity || '').trim());
+      formData.append('outstandingBalance', formOutstandingBalance || '0');
+      formData.append('notes', (formNotes || '').trim());
+      formData.append('nic', (formNic || '').trim());
+      if (formImage && formImage.startsWith('data:')) {
+        const blob = dataUrlToBlob(formImage);
+        if (blob) formData.append('photo', blob, `customer-${Date.now()}.jpg`);
+      }
+
+      if (isEdit && selectedCustomer) {
+        const numericId = selectedCustomer.id.replace('c-', '');
+        await put<any>(`/customers/${numericId}`, formData);
+      } else {
+        await post<any>('/customers', formData);
+      }
+
+      // Refresh list from API
+      const customerData = await get<any[]>('/customers');
+      const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+      const mapped: Customer[] = customerData.map((c: any) => ({
+        id: `c-${c.id}`,
+        name: c.name,
+        phone: c.phone || '',
+        email: c.email || '',
+        address: c.address || '',
+        city: c.city || 'Unknown',
+        image: c.photoUrl ? (c.photoUrl.startsWith('/uploads/') ? `${apiBase}${c.photoUrl}` : c.photoUrl) : undefined,
+        customerType: 'Regular' as CustomerType,
+        totalPurchases: c.totalOrders || 0,
+        totalSpent: 0,
+        outstandingBalance: c.outstandingBalance || 0,
+        loyaltyPoints: 0,
+        nic: c.nic || '',
+        notes: c.notes || '',
+        status: 'active' as const,
+        joinedDate: c.createdAt ? new Date(c.createdAt).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+      }));
+      setCustomers(mapped);
+      isEdit ? setShowEditModal(false) : setShowAddModal(false);
+      toast.success(isEdit ? 'Customer updated' : 'Customer added', { description: formName });
+    } catch (err: any) {
+      console.error('[Customers] Save error:', err);
+      toast.error(err?.message || 'Failed to save customer');
     }
     setSelectedCustomer(null);
   };
 
-  const handleDeleteCustomer = () => {
+  const handleDeleteCustomer = async () => {
     if (!selectedCustomer) return;
-    setCustomers(prev => prev.filter(c => c.id !== selectedCustomer.id));
-    toast.success('Customer removed', { description: selectedCustomer.name });
+    try {
+      const numericId = selectedCustomer.id.replace('c-', '');
+      await del(`/customers/${numericId}`);
+      setCustomers(prev => prev.filter(c => c.id !== selectedCustomer.id));
+      toast.success('Customer removed', { description: selectedCustomer.name });
+    } catch (err: any) {
+      console.error('[Customers] Delete error:', err);
+      toast.error(err?.message || 'Failed to delete customer');
+    }
     setSelectedCustomer(null);
   };
 
@@ -507,10 +591,6 @@ export const Customers: React.FC = () => {
                 <div>
                   <label className={labelClass}>NIC (National ID)</label>
                   <input value={formNic} onChange={e => setFormNic(e.target.value)} placeholder="e.g., 199012345678" className={inputClass} />
-                </div>
-                <div>
-                  <label className={labelClass}>Loyalty Points</label>
-                  <input type="number" value={formLoyaltyPoints} onChange={e => setFormLoyaltyPoints(e.target.value)} placeholder="0" className={inputClass} />
                 </div>
               </div>
             </div>
@@ -1180,21 +1260,27 @@ export const Customers: React.FC = () => {
             }`}>
               {/* Image / Avatar header */}
               <div className={`relative h-28 sm:h-32 overflow-hidden ${dark ? 'bg-neutral-900' : 'bg-gray-100'}`}>
-                {customer.image ? (
-                  <>
-                    <img src={customer.image} alt="" className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl opacity-40 pointer-events-none" aria-hidden="true" />
-                    <img src={customer.image} alt={customer.name} className="relative w-full h-full object-contain p-3 z-[1]"
-                      onError={(e) => { e.currentTarget.style.display = 'none'; const fb = e.currentTarget.nextElementSibling as HTMLElement; if (fb) fb.style.display = 'flex'; }}
-                    />
-                    <div style={{ display: 'none' }} className="absolute inset-0 flex items-center justify-center z-[1]">
+                {(() => {
+                  const imgUrl = customer.image?.startsWith('/uploads/') ? `${import.meta.env.VITE_API_URL || 'http://localhost:5000'}${customer.image}` : customer.image;
+                  if (imgUrl) {
+                    return (
+                      <>
+                        <img src={imgUrl} alt="" className="absolute inset-0 w-full h-full object-cover scale-110 blur-xl opacity-40 pointer-events-none" aria-hidden="true" />
+                        <img src={imgUrl} alt={customer.name} className="relative w-full h-full object-contain p-3 z-[1]"
+                          onError={(e) => { e.currentTarget.style.display = 'none'; const fb = e.currentTarget.nextElementSibling as HTMLElement; if (fb) fb.style.display = 'flex'; }}
+                        />
+                        <div style={{ display: 'none' }} className="absolute inset-0 flex items-center justify-center z-[1]">
+                          <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold ${dark ? 'bg-neutral-800 text-white' : 'bg-gray-200 text-gray-700'}`}>{customer.name.charAt(0)}</div>
+                        </div>
+                      </>
+                    );
+                  }
+                  return (
+                    <div className="absolute inset-0 flex items-center justify-center">
                       <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold ${dark ? 'bg-neutral-800 text-white' : 'bg-gray-200 text-gray-700'}`}>{customer.name.charAt(0)}</div>
                     </div>
-                  </>
-                ) : (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className={`w-16 h-16 rounded-2xl flex items-center justify-center text-2xl font-bold ${dark ? 'bg-neutral-800 text-white' : 'bg-gray-200 text-gray-700'}`}>{customer.name.charAt(0)}</div>
-                  </div>
-                )}
+                  );
+                })()}
                 <div className="absolute top-2.5 right-2.5 z-[2]">{statusBadge(customer.status)}</div>
                 <div className="absolute top-2.5 left-2.5 z-[2]">{typeBadge(customer.customerType)}</div>
               </div>

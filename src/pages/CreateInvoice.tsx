@@ -108,6 +108,52 @@ export const CreateInvoice: React.FC = () => {
   const [customerName, setCustomerName] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerEmail, setCustomerEmail] = useState('');
+  const [customerId, setCustomerId] = useState<number | null>(null);
+  const [customers, setCustomers] = useState<any[]>([]);
+  const [customerSearch, setCustomerSearch] = useState('');
+  const [showCustomerDropdown, setShowCustomerDropdown] = useState(false);
+  const customerDropdownRef = useRef<HTMLDivElement>(null);
+
+  // Load customers on mount
+  useEffect(() => {
+    const fetchCustomers = async () => {
+      try {
+        const data = await get<any[]>('/customers');
+        setCustomers(data);
+      } catch (err) {
+        console.error('[CreateInvoice] Failed to load customers:', err);
+      }
+    };
+    fetchCustomers();
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (customerDropdownRef.current && !customerDropdownRef.current.contains(e.target as Node)) {
+        setShowCustomerDropdown(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const filteredCustomers = useMemo(() => {
+    if (!customerSearch) return customers;
+    const q = customerSearch.toLowerCase();
+    return customers.filter((c: any) =>
+      c.name.toLowerCase().includes(q) || (c.phone && c.phone.includes(q))
+    );
+  }, [customers, customerSearch]);
+
+  const selectCustomer = (customer: any) => {
+    setCustomerId(customer.id);
+    setCustomerName(customer.name);
+    setCustomerPhone(customer.phone || '');
+    setCustomerEmail(customer.email || '');
+    setCustomerSearch('');
+    setShowCustomerDropdown(false);
+  };
 
   // Items
   const [items, setItems] = useState<InvoiceItem[]>([]);
@@ -176,9 +222,10 @@ export const CreateInvoice: React.FC = () => {
     setSaving(true);
 
     try {
-      const payload = {
+      const payload: any = {
         customerName: customerName || 'Walk-in Customer',
         customerPhone: customerPhone || null,
+        customerId: customerId,
         paymentMethod,
         paidAmount: Math.min(paid, total),
         discount: totalDiscount,
@@ -314,18 +361,57 @@ export const CreateInvoice: React.FC = () => {
 
       {/* Step 1: Customer */}
       {step === 'customer' && (
-        <div className={`${cardClass} p-4 sm:p-5`}>
-          <div className="flex items-center gap-2 mb-4">
-            <User className={`w-5 h-5 ${dark ? 'text-neutral-400' : 'text-gray-500'}`} />
-            <h3 className={`font-semibold ${dark ? 'text-white' : 'text-gray-900'}`}>Customer Details</h3>
-            <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? 'bg-neutral-800 text-neutral-500' : 'bg-gray-100 text-gray-400'}`}>Optional</span>
+          <div className={`${cardClass} p-4 sm:p-5`}>
+            <div className="flex items-center gap-2 mb-4">
+              <User className={`w-5 h-5 ${dark ? 'text-neutral-400' : 'text-gray-500'}`} />
+              <h3 className={`font-semibold ${dark ? 'text-white' : 'text-gray-900'}`}>Customer Details</h3>
+              <span className={`text-xs px-2 py-0.5 rounded-full ${dark ? 'bg-neutral-800 text-neutral-500' : 'bg-gray-100 text-gray-400'}`}>Optional</span>
+            </div>
+            <div className="relative mb-4" ref={customerDropdownRef}>
+              <label className={labelClass}>Search Existing Customer</label>
+              <div className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border transition-all ${dark ? 'bg-neutral-800/50 border-neutral-700/50 focus-within:border-white/30' : 'bg-white border-gray-200 focus-within:border-gray-400'}`}>
+                <Search className={`w-4 h-4 flex-shrink-0 ${dark ? 'text-neutral-500' : 'text-gray-400'}`} />
+                <input
+                  value={customerId ? (customers.find((c: any) => c.id === customerId)?.name || customerSearch) : customerSearch}
+                  onChange={e => { setCustomerId(null); setCustomerSearch(e.target.value); setShowCustomerDropdown(true); }}
+                  onFocus={() => setShowCustomerDropdown(true)}
+                  placeholder="Search by name or phone..."
+                  className={`bg-transparent border-none outline-none flex-1 text-sm ${dark ? 'text-white placeholder-neutral-500' : 'text-gray-900 placeholder-gray-400'}`}
+                />
+                {(customerId || customerSearch) && (
+                  <button onClick={() => { selectCustomer({ id: null, name: '', phone: '', email: '' }); setCustomerId(null); setCustomerName(''); setCustomerPhone(''); setCustomerEmail(''); setCustomerSearch(''); }}
+                    className={`p-0.5 rounded ${dark ? 'hover:bg-neutral-700 text-neutral-400' : 'hover:bg-gray-200 text-gray-400'}`}><X className="w-3.5 h-3.5" /></button>
+                )}
+              </div>
+              {customerId && (
+                <div className={`mt-2 flex items-center gap-2 px-3 py-1.5 rounded-xl ${dark ? 'bg-green-500/10 border border-green-500/20' : 'bg-green-50 border border-green-200'}`}>
+                  <span className={`text-xs font-medium ${dark ? 'text-green-400' : 'text-green-700'}`}>Selected: {customers.find((c: any) => c.id === customerId)?.name}</span>
+                </div>
+              )}
+              {showCustomerDropdown && !customerId && (
+                <div className={`absolute left-0 right-0 top-full mt-1 rounded-xl border shadow-xl overflow-hidden z-50 max-h-48 overflow-y-auto ${dark ? 'bg-neutral-900 border-neutral-700' : 'bg-white border-gray-200'}`}>
+                  {filteredCustomers.slice(0, 10).map((customer: any) => (
+                    <button key={customer.id} onClick={() => selectCustomer(customer)}
+                      className={`w-full flex items-center gap-3 px-3 py-2.5 text-left transition-colors ${dark ? 'hover:bg-neutral-800 text-neutral-200' : 'hover:bg-gray-50 text-gray-700'}`}>
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold flex-shrink-0 ${dark ? 'bg-neutral-800 text-white' : 'bg-gray-100 text-gray-700'}`}>{customer.name.charAt(0)}</div>
+                      <div className="flex-1 min-w-0">
+                        <p className={`text-sm font-medium truncate ${dark ? 'text-white' : 'text-gray-900'}`}>{customer.name}</p>
+                        <p className={`text-xs ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>{customer.phone || 'No phone'}</p>
+                      </div>
+                    </button>
+                  ))}
+                  {filteredCustomers.length === 0 && (
+                    <p className={`px-3 py-4 text-xs text-center ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>No customers found — enter new name below</p>
+                  )}
+                </div>
+              )}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="sm:col-span-2"><label className={labelClass}>Customer Name</label><input value={customerName} onChange={e => { setCustomerId(null); setCustomerName(e.target.value); }} placeholder="Walk-in Customer" className={inputClass} /></div>
+              <div><label className={labelClass}>Phone Number</label><input value={customerPhone} onChange={e => { setCustomerId(null); setCustomerPhone(e.target.value); }} placeholder="077-XXXXXXX" className={inputClass} /></div>
+              <div><label className={labelClass}>Email</label><input value={customerEmail} onChange={e => { setCustomerId(null); setCustomerEmail(e.target.value); }} placeholder="customer@email.com" className={inputClass} /></div>
+            </div>
           </div>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="sm:col-span-2"><label className={labelClass}>Customer Name</label><input value={customerName} onChange={e => setCustomerName(e.target.value)} placeholder="Walk-in Customer" className={inputClass} /></div>
-            <div><label className={labelClass}>Phone Number</label><input value={customerPhone} onChange={e => setCustomerPhone(e.target.value)} placeholder="077-XXXXXXX" className={inputClass} /></div>
-            <div><label className={labelClass}>Email</label><input value={customerEmail} onChange={e => setCustomerEmail(e.target.value)} placeholder="customer@email.com" className={inputClass} /></div>
-          </div>
-        </div>
       )}
 
       {/* Step 2: Items */}
