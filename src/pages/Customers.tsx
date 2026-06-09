@@ -91,7 +91,7 @@ export const Customers: React.FC = () => {
 
   // ─── State ───
   const [customers, setCustomers] = useState<Customer[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [, setLoading] = useState(true);
   const [cities, setCities] = useState<string[]>([]);
 
   // Fetch customers & cities from API on mount

@@ -71,6 +71,16 @@ interface NewsletterData {
   subtext?: string;
 }
 
+// ── Resolve raw image path to full URL ─────────────────────────────────────
+const API_BASE = (import.meta.env.VITE_API_URL || 'http://localhost:5000/api')
+  .replace(/\/api\/?$/, '')
+  .replace(/\/+$/, '');
+const getImageUrl = (raw: string | null | undefined): string => {
+  if (!raw || !raw.trim()) return 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=600&q=80';
+  if (raw.startsWith('blob:') || raw.startsWith('data:') || /^https?:\/\//i.test(raw)) return raw;
+  return `${API_BASE}/${raw.replace(/^\/+/, '')}`;
+};
+
 // ── Map API product to frontend shape ───────────────────────────────────────
 function mapProduct(p: ApiProduct): MappedProduct {
   const totalStock = p.variants.reduce((sum, v) => sum + v.stock, 0);
@@ -88,7 +98,7 @@ function mapProduct(p: ApiProduct): MappedProduct {
     id: String(p.id),
     name: p.name,
     category: p.category.name,
-    image: p.images?.[0]?.imageUrl || p.image || 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=600&q=80',
+    image: getImageUrl(p.images?.[0]?.imageUrl || p.image) || 'https://images.unsplash.com/photo-1441984904996-e0b6ba687e04?w=600&q=80',
     price: p.price,
     sizes,
     colors,
@@ -243,7 +253,7 @@ export const StoreFront: React.FC = () => {
 
       {/* Season End Sale Banner — dynamic from settings */}
       <SaleBanner
-        image={saleBanner?.image}
+        image={saleBanner?.image ? getImageUrl(saleBanner.image) : undefined}
         heading={saleBanner?.heading}
         subheading={saleBanner?.subheading}
         buttonLink={saleBanner?.buttonLink}

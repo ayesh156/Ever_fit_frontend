@@ -4,9 +4,14 @@ import { BrowserRouter, Routes, Route, useLocation, Navigate } from 'react-route
 import { ThemeProvider } from './contexts/ThemeContext';
 import { CartProvider } from './contexts/CartContext';
 import { WishlistProvider } from './contexts/WishlistContext';
+import { AuthProvider } from './contexts/AuthContext';
 import { Layout } from './components/Layout';
+import { ProtectedRoute } from './components/ProtectedRoute';
 import { Toaster } from 'sonner';
 import { useTheme } from './contexts/ThemeContext';
+
+// Auth
+import { Login } from './pages/Login';
 
 // Admin pages
 import { Dashboard }     from './pages/Dashboard';
@@ -69,45 +74,51 @@ function App() {
     <ThemeProvider>
       <CartProvider>
         <WishlistProvider>
-          <ThemedToaster />
-          <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-            <ScrollToTop />
-            <Routes>
+          <AuthProvider>
+            <ThemedToaster />
+            <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+              <ScrollToTop />
+              <Routes>
 
-              {/* ── Ecommerce Store — root ── */}
-              <Route path="/" element={<EcommerceLayout />}>
-                <Route index element={<StoreFront />} />
-                <Route path="shop"           element={<ShopPage />} />
-                <Route path="product/:id"    element={<ProductDetail />} />
-                <Route path="cart"           element={<CartPage />} />
-                <Route path="wishlist"       element={<WishlistPage />} />
-                <Route path="categories"     element={<CategoriesPage />} />
-                <Route path="about"          element={<AboutPage />} />
-                <Route path="contact"        element={<ContactPage />} />
-              </Route>
+                {/* ── Login (no auth required) ── */}
+                <Route path="/login" element={<Login />} />
 
-              {/* ── Admin System — /system/* ── */}
-              <Route path="/system"                  element={<AdminPage><Dashboard /></AdminPage>} />
-              <Route path="/system/products"         element={<AdminPage><Products /></AdminPage>} />
-              <Route path="/system/products/labels"  element={<AdminPage><ProductLabels /></AdminPage>} />
-              <Route path="/system/categories"       element={<AdminPage><Categories /></AdminPage>} />
-              <Route path="/system/invoices"         element={<AdminPage><Invoices /></AdminPage>} />
-              <Route path="/checkout"                element={<Checkout />} />
-              <Route path="/track-order"             element={<TrackOrder />} />
-              <Route path="/system/invoices/create"  element={<AdminPage><CreateInvoice /></AdminPage>} />
-              <Route path="/system/suppliers"        element={<AdminPage><Suppliers /></AdminPage>} />
-              <Route path="/system/customers"        element={<AdminPage><Customers /></AdminPage>} />
-              <Route path="/system/reports"          element={<AdminPage><Reports /></AdminPage>} />
-              <Route path="/system/settings"         element={<AdminPage><Settings /></AdminPage>} />
-              <Route path="/system/storefront-settings" element={<AdminPage><StorefrontSettings /></AdminPage>} />
-              <Route path="/system/subscribers"        element={<AdminPage><Subscribers /></AdminPage>} />
+                {/* ── Ecommerce Store — root ── */}
+                <Route path="/" element={<EcommerceLayout />}>
+                  <Route index element={<StoreFront />} />
+                  <Route path="shop"           element={<ShopPage />} />
+                  <Route path="product/:id"    element={<ProductDetail />} />
+                  <Route path="cart"           element={<CartPage />} />
+                  <Route path="wishlist"       element={<WishlistPage />} />
+                  <Route path="categories"     element={<CategoriesPage />} />
+                  <Route path="about"          element={<AboutPage />} />
+                  <Route path="contact"        element={<ContactPage />} />
+                </Route>
 
-              {/* Legacy /store redirect — keeps old bookmarks working */}
-              <Route path="/store"    element={<Navigate to="/"         replace />} />
-              <Route path="/store/*"  element={<Navigate to="/"         replace />} />
+                {/* ── Admin System — /system/* (protected) ── */}
+                <Route path="/system"                  element={<ProtectedRoute><AdminPage><Dashboard /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/dashboard"        element={<ProtectedRoute><AdminPage><Dashboard /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/products"         element={<ProtectedRoute><AdminPage><Products /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/products/labels"  element={<ProtectedRoute><AdminPage><ProductLabels /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/categories"       element={<ProtectedRoute><AdminPage><Categories /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/invoices"         element={<ProtectedRoute><AdminPage><Invoices /></AdminPage></ProtectedRoute>} />
+                <Route path="/checkout"                element={<Checkout />} />
+                <Route path="/track-order"             element={<TrackOrder />} />
+                <Route path="/system/invoices/create"  element={<ProtectedRoute><AdminPage><CreateInvoice /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/suppliers"        element={<ProtectedRoute><AdminPage><Suppliers /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/customers"        element={<ProtectedRoute><AdminPage><Customers /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/reports"          element={<ProtectedRoute><AdminPage><Reports /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/settings"         element={<ProtectedRoute><AdminPage><Settings /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/storefront-settings" element={<ProtectedRoute><AdminPage><StorefrontSettings /></AdminPage></ProtectedRoute>} />
+                <Route path="/system/subscribers"        element={<ProtectedRoute><AdminPage><Subscribers /></AdminPage></ProtectedRoute>} />
 
-            </Routes>
-          </BrowserRouter>
+                {/* Legacy /store redirect — keeps old bookmarks working */}
+                <Route path="/store"    element={<Navigate to="/"         replace />} />
+                <Route path="/store/*"  element={<Navigate to="/"         replace />} />
+
+              </Routes>
+            </BrowserRouter>
+          </AuthProvider>
         </WishlistProvider>
       </CartProvider>
     </ThemeProvider>

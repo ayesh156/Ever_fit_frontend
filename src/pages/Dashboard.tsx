@@ -1,477 +1,423 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
+import { NavLink } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
 import { formatCurrency } from '../lib/utils';
 import { get } from '../lib/api';
 import {
-  mockDailySales, mockProducts, mockInvoices, mockSuppliers, mockCustomers,
-  categoryRevenue, topSellingProducts,
-} from '../data/mockData';
-import {
   DollarSign, TrendingUp, ArrowUpRight, ArrowDownRight,
-  Package, Users, Truck, FileText, AlertTriangle, Star, CreditCard, Clock,
-  BarChart3,
+  Package, Users, AlertTriangle, Star, Clock, Loader2,
+  BarChart3, ShoppingBag, AlertCircle, Eye,
 } from 'lucide-react';
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-  BarChart, Bar,
-} from 'recharts';
+
+// ── Types ───────────────────────────────────────────────────────────────────
+interface DashboardMetrics {
+  todayRevenue: number;
+  revenueGrowth: number;
+  pendingOrdersCount: number;
+  lowStockItemsCount: number;
+  totalActiveCustomers: number;
+  recentOrders: {
+    id: number;
+    customerName: string;
+    totalAmount: number;
+    paidAmount: number;
+    status: string;
+    createdAt: string;
+  }[];
+  lowStockProducts: {
+    id: number;
+    productId: number;
+    productName: string;
+    size: string;
+    color: string;
+    sku: string;
+    stock: number;
+  }[];
+}
+
+const STATUS_LABELS: Record<string, string> = {
+  PENDING: 'Pending',
+  PAID: 'Paid',
+  CANCELLED: 'Cancelled',
+  PENDING_RECEIPT: 'Pending Receipt',
+  PAYMENT_REVIEW: 'Payment Review',
+  PAYMENT_VERIFIED: 'Payment Verified',
+  PROCESSING: 'Processing',
+  SHIPPED: 'Shipped',
+  DELIVERED: 'Delivered',
+};
+
+const STATUS_COLORS: Record<string, string> = {
+  PENDING: 'bg-amber-500/10 text-amber-500',
+  PAID: 'bg-green-500/10 text-green-500',
+  CANCELLED: 'bg-red-500/10 text-red-400',
+  PENDING_RECEIPT: 'bg-amber-500/10 text-amber-500',
+  PAYMENT_REVIEW: 'bg-purple-500/10 text-purple-500',
+  PAYMENT_VERIFIED: 'bg-blue-500/10 text-blue-500',
+  PROCESSING: 'bg-amber-500/10 text-amber-500',
+  SHIPPED: 'bg-blue-500/10 text-blue-500',
+  DELIVERED: 'bg-green-500/10 text-green-500',
+};
 
 export const Dashboard: React.FC = () => {
   const { theme } = useTheme();
-  const [webOrders, setWebOrders] = useState<any[]>([]);
+  const dark = theme === 'dark';
 
-  useEffect(() => {
-    const fetchWebOrders = async () => {
-      try {
-        const data = await get<any[]>('/orders');
-        const bank = data.filter((o: any) => o.paymentMethod === 'bank-transfer' || o.customerName !== 'Walk-in Customer').slice(0, 5);
-        setWebOrders(bank);
-      } catch {}
-    };
-    fetchWebOrders();
+  const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const fetchMetrics = useCallback(async () => {
+    try {
+      const data = await get<DashboardMetrics>('/dashboard/live-metrics');
+      setMetrics(data);
+      setError(null);
+    } catch (err) {
+      console.error('[Dashboard] Fetch error:', err);
+      setError('Failed to load dashboard data');
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  // Sales Data
-  const salesData = mockDailySales.slice(-14);
-  const todayRevenue = salesData[salesData.length - 1]?.revenue || 0;
-  const yesterdayRevenue = salesData[salesData.length - 2]?.revenue || 0;
-  const revChange = yesterdayRevenue > 0 ? ((todayRevenue - yesterdayRevenue) / yesterdayRevenue * 100) : 0;
-  const totalRevenue14d = salesData.reduce((s, d) => s + d.revenue, 0);
-  const totalProfit14d = salesData.reduce((s, d) => s + d.profit, 0);
+  useEffect(() => {
+    fetchMetrics();
+  }, [fetchMetrics]);
 
-  const chartData = salesData.map(d => ({
-    date: new Date(d.date).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-    revenue: d.revenue,
-    profit: d.profit,
-  }));
+  // ── Socket.io live sync ──────────────────────────────────────────────────
+  useEffect(() => {
+    const apiBase = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    const wsBase = apiBase.replace(/\/api\/?$/, '');
+    let socket: any = null;
 
-  // Inventory
-  const inStock = mockProducts.filter(p => p.status === 'in-stock').length;
-  const lowStock = mockProducts.filter(p => p.status === 'low-stock').length;
-  const outOfStock = mockProducts.filter(p => p.status === 'out-of-stock').length;
-  const lowStockProducts = mockProducts.filter(p => p.status === 'low-stock' || p.status === 'out-of-stock').slice(0, 5);
+    import('socket.io-client').then(({ io }) => {
+      socket = io(wsBase, { transports: ['websocket', 'polling'] });
 
-  // Invoices
-  const paidInvoices = mockInvoices.filter(i => i.status === 'paid');
-  const pendingInvoices = mockInvoices.filter(i => i.status === 'pending' || i.status === 'partial');
-  const totalOutstanding = mockInvoices.reduce((s, i) => s + (i.total - i.paidAmount), 0);
-  const recentInvoices = [...mockInvoices].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()).slice(0, 5);
+      socket.on('connect', () => {
+        console.log('[Dashboard] Socket connected');
+      });
 
-  // Customers
-  const activeCustomers = mockCustomers.filter(c => c.status === 'active').length;
-  const vipCustomers = mockCustomers.filter(c => c.customerType === 'VIP').length;
-  const customerOutstanding = mockCustomers.reduce((s, c) => s + c.outstandingBalance, 0);
-  const topCustomersBySpend = [...mockCustomers].sort((a, b) => b.totalSpent - a.totalSpent).slice(0, 4);
+      socket.on('newOrder', (order: any) => {
+        setMetrics(prev => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            pendingOrdersCount: prev.pendingOrdersCount + 1,
+            recentOrders: [
+              {
+                id: order.id,
+                customerName: order.customerName || 'Walk-in Customer',
+                totalAmount: order.totalAmount,
+                paidAmount: order.paidAmount,
+                status: order.status,
+                createdAt: order.createdAt,
+              },
+              ...prev.recentOrders,
+            ].slice(0, 5),
+          };
+        });
+      });
 
-  // Suppliers
-  const activeSuppliers = mockSuppliers.filter(s => s.status === 'active').length;
-  const supplierOutstanding = mockSuppliers.reduce((s, sup) => s + sup.outstandingBalance, 0);
-  const avgRating = mockSuppliers.filter(s => s.status === 'active').reduce((s, sup) => s + sup.rating, 0) / (activeSuppliers || 1);
+      socket.on('orderUpdated', (order: any) => {
+        setMetrics(prev => {
+          if (!prev) return prev;
+          return {
+            ...prev,
+            recentOrders: prev.recentOrders.map(o =>
+              o.id === order.id
+                ? { ...o, status: order.status, totalAmount: order.totalAmount, paidAmount: order.paidAmount }
+                : o
+            ),
+          };
+        });
+      });
+    });
 
+    return () => {
+      if (socket) socket.close();
+    };
+  }, []);
+
+  // ── Styles ───────────────────────────────────────────────────────────────
   const cardClass = `rounded-2xl border p-3 sm:p-5 ${
-    theme === 'dark' ? 'bg-neutral-900/50 border-neutral-800/60' : 'bg-white border-gray-200 shadow-sm'
+    dark ? 'bg-neutral-900/50 border-neutral-800/60' : 'bg-white border-gray-200 shadow-sm'
   }`;
 
-  const tooltipStyle = {
-    background: theme === 'dark' ? '#171717' : '#fff',
-    border: `1px solid ${theme === 'dark' ? '#262626' : '#e5e5e5'}`,
-    borderRadius: '12px',
-    color: theme === 'dark' ? '#fff' : '#171717',
-    fontSize: 12,
-  };
+  if (loading) {
+    return (
+      <div className={`min-h-[60vh] flex flex-col items-center justify-center gap-4`}>
+        <Loader2 className={`w-10 h-10 animate-spin ${dark ? 'text-neutral-400' : 'text-gray-400'}`} />
+        <p className={`text-sm ${dark ? 'text-neutral-500' : 'text-gray-500'}`}>Loading operational dashboard…</p>
+      </div>
+    );
+  }
+
+  if (error || !metrics) {
+    return (
+      <div className={`min-h-[60vh] flex flex-col items-center justify-center gap-4`}>
+        <AlertCircle className={`w-12 h-12 ${dark ? 'text-neutral-600' : 'text-gray-300'}`} />
+        <p className={`text-sm ${dark ? 'text-neutral-400' : 'text-gray-500'}`}>{error || 'No data available'}</p>
+        <button
+          onClick={() => { setLoading(true); fetchMetrics(); }}
+          className="px-4 py-2 rounded-xl text-sm font-medium bg-emerald-600 text-white hover:bg-emerald-700 transition-all"
+        >Retry</button>
+      </div>
+    );
+  }
+
+  const {
+    todayRevenue,
+    revenueGrowth,
+    pendingOrdersCount,
+    lowStockItemsCount,
+    totalActiveCustomers,
+    recentOrders,
+    lowStockProducts,
+  } = metrics;
 
   return (
     <div className="space-y-6 pb-8">
       {/* Header */}
       <div>
-        <h1 className={`text-2xl lg:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Dashboard</h1>
-        <p className={`mt-1 ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>
-          Welcome back — here's your business at a glance
+        <h1 className={`text-2xl lg:text-3xl font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>Dashboard</h1>
+        <p className={`mt-1 ${dark ? 'text-neutral-400' : 'text-gray-500'}`}>
+          Real-time operational command center &middot; Live data from {import.meta.env.VITE_API_URL || 'backend'}
         </p>
       </div>
 
-      {/* ═══════ KEY METRICS ═══════ */}
+      {/* ═══════ TOP KPI ROW ═══════ */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
         {/* Today's Revenue */}
         <div className={`${cardClass} relative overflow-hidden`}>
-          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-neutral-500/5 to-transparent rounded-full blur-2xl" />
+          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-emerald-500/5 to-transparent rounded-full blur-2xl" />
           <div className="relative flex items-start justify-between">
             <div>
-              <p className={`text-xs sm:text-sm font-medium ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>Today's Revenue</p>
-              <p className={`text-lg sm:text-xl font-bold mt-1 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(todayRevenue)}</p>
-              <div className={`flex items-center gap-1 mt-1.5 text-xs font-medium ${revChange >= 0 ? 'text-green-500' : 'text-red-400'}`}>
-                {revChange >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
-                <span>{Math.abs(revChange).toFixed(1)}%</span>
+              <p className={`text-xs sm:text-sm font-medium ${dark ? 'text-neutral-400' : 'text-gray-500'}`}>Today's Revenue</p>
+              <p className={`text-lg sm:text-xl font-bold mt-1 ${dark ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(todayRevenue)}</p>
+              <div className={`flex items-center gap-1 mt-1.5 text-xs font-medium ${revenueGrowth >= 0 ? 'text-emerald-500' : 'text-red-400'}`}>
+                {revenueGrowth >= 0 ? <ArrowUpRight className="w-3 h-3" /> : <ArrowDownRight className="w-3 h-3" />}
+                <span>{Math.abs(revenueGrowth).toFixed(1)}% vs yesterday</span>
               </div>
             </div>
-            <div className={`p-2 sm:p-2.5 rounded-xl ${theme === 'dark' ? 'bg-neutral-800' : 'bg-gray-100'}`}>
-              <DollarSign className={`w-4 h-4 sm:w-5 sm:h-5 ${theme === 'dark' ? 'text-white' : 'text-gray-700'}`} />
+            <div className={`p-2 sm:p-2.5 rounded-xl ${dark ? 'bg-neutral-800' : 'bg-gray-100'}`}>
+              <DollarSign className={`w-4 h-4 sm:w-5 sm:h-5 ${dark ? 'text-emerald-400' : 'text-emerald-600'}`} />
             </div>
           </div>
         </div>
 
-        {/* Total Invoices */}
+        {/* Pending Orders */}
         <div className={`${cardClass} relative overflow-hidden`}>
-          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-neutral-500/5 to-transparent rounded-full blur-2xl" />
+          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-amber-500/5 to-transparent rounded-full blur-2xl" />
           <div className="relative flex items-start justify-between">
             <div>
-              <p className={`text-xs sm:text-sm font-medium ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>Invoices</p>
-              <p className={`text-lg sm:text-xl font-bold mt-1 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{mockInvoices.length}</p>
+              <p className={`text-xs sm:text-sm font-medium ${dark ? 'text-neutral-400' : 'text-gray-500'}`}>Pending Orders</p>
+              <p className={`text-lg sm:text-xl font-bold mt-1 flex items-center gap-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                {pendingOrdersCount}
+                {pendingOrdersCount > 0 && (
+                  <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                )}
+              </p>
               <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-amber-400">
                 <Clock className="w-3 h-3" />
-                <span>{pendingInvoices.length} pending</span>
+                <span>Requires attention</span>
               </div>
             </div>
-            <div className={`p-2 sm:p-2.5 rounded-xl ${theme === 'dark' ? 'bg-neutral-800' : 'bg-gray-100'}`}>
-              <FileText className={`w-4 h-4 sm:w-5 sm:h-5 ${theme === 'dark' ? 'text-white' : 'text-gray-700'}`} />
+            <div className={`p-2 sm:p-2.5 rounded-xl ${dark ? 'bg-neutral-800' : 'bg-gray-100'}`}>
+              <ShoppingBag className={`w-4 h-4 sm:w-5 sm:h-5 ${dark ? 'text-amber-400' : 'text-amber-600'}`} />
             </div>
           </div>
         </div>
 
-        {/* Products */}
+        {/* Low Stock Alerts */}
         <div className={`${cardClass} relative overflow-hidden`}>
-          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-neutral-500/5 to-transparent rounded-full blur-2xl" />
+          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-red-500/5 to-transparent rounded-full blur-2xl" />
           <div className="relative flex items-start justify-between">
             <div>
-              <p className={`text-xs sm:text-sm font-medium ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>Products</p>
-              <p className={`text-lg sm:text-xl font-bold mt-1 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{mockProducts.length}</p>
-              {lowStock + outOfStock > 0 && (
+              <p className={`text-xs sm:text-sm font-medium ${dark ? 'text-neutral-400' : 'text-gray-500'}`}>Low Stock Alerts</p>
+              <p className={`text-lg sm:text-xl font-bold mt-1 ${lowStockItemsCount > 0 ? 'text-red-400' : dark ? 'text-white' : 'text-gray-900'}`}>
+                {lowStockItemsCount}
+              </p>
+              {lowStockItemsCount > 0 ? (
                 <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-red-400">
                   <AlertTriangle className="w-3 h-3" />
-                  <span>{lowStock + outOfStock} need attention</span>
+                  <span>Needs restocking</span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-emerald-500">
+                  <Star className="w-3 h-3" />
+                  <span>Well-stocked</span>
                 </div>
               )}
             </div>
-            <div className={`p-2 sm:p-2.5 rounded-xl ${theme === 'dark' ? 'bg-neutral-800' : 'bg-gray-100'}`}>
-              <Package className={`w-4 h-4 sm:w-5 sm:h-5 ${theme === 'dark' ? 'text-white' : 'text-gray-700'}`} />
+            <div className={`p-2 sm:p-2.5 rounded-xl ${dark ? 'bg-neutral-800' : 'bg-gray-100'}`}>
+              <Package className={`w-4 h-4 sm:w-5 sm:h-5 ${lowStockItemsCount > 0 ? 'text-red-400' : dark ? 'text-neutral-400' : 'text-gray-500'}`} />
             </div>
           </div>
         </div>
 
-        {/* Customers */}
+        {/* Total Customers */}
         <div className={`${cardClass} relative overflow-hidden`}>
-          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-neutral-500/5 to-transparent rounded-full blur-2xl" />
+          <div className="absolute top-0 right-0 w-24 h-24 bg-gradient-to-br from-blue-500/5 to-transparent rounded-full blur-2xl" />
           <div className="relative flex items-start justify-between">
             <div>
-              <p className={`text-xs sm:text-sm font-medium ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>Customers</p>
-              <p className={`text-lg sm:text-xl font-bold mt-1 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{mockCustomers.length}</p>
-              <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-green-500">
-                <Star className="w-3 h-3" />
-                <span>{vipCustomers} VIP</span>
+              <p className={`text-xs sm:text-sm font-medium ${dark ? 'text-neutral-400' : 'text-gray-500'}`}>Active Customers</p>
+              <p className={`text-lg sm:text-xl font-bold mt-1 ${dark ? 'text-white' : 'text-gray-900'}`}>{totalActiveCustomers}</p>
+              <div className="flex items-center gap-1 mt-1.5 text-xs font-medium text-emerald-500">
+                <Users className="w-3 h-3" />
+                <span>Registered in system</span>
               </div>
             </div>
-            <div className={`p-2 sm:p-2.5 rounded-xl ${theme === 'dark' ? 'bg-neutral-800' : 'bg-gray-100'}`}>
-              <Users className={`w-4 h-4 sm:w-5 sm:h-5 ${theme === 'dark' ? 'text-white' : 'text-gray-700'}`} />
+            <div className={`p-2 sm:p-2.5 rounded-xl ${dark ? 'bg-neutral-800' : 'bg-gray-100'}`}>
+              <Users className={`w-4 h-4 sm:w-5 sm:h-5 ${dark ? 'text-blue-400' : 'text-blue-600'}`} />
             </div>
           </div>
         </div>
       </div>
 
-      {/* ═══════ FINANCIALS ROW ═══════ */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
-        <div className={`${cardClass} flex items-center gap-3`}>
-          <div className={`p-2.5 rounded-xl bg-green-500/10`}><TrendingUp className="w-5 h-5 text-green-500" /></div>
-          <div>
-            <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>14d Revenue</p>
-            <p className={`text-sm sm:text-base font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(totalRevenue14d)}</p>
-          </div>
-        </div>
-        <div className={`${cardClass} flex items-center gap-3`}>
-          <div className={`p-2.5 rounded-xl bg-blue-500/10`}><BarChart3 className="w-5 h-5 text-blue-400" /></div>
-          <div>
-            <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>14d Profit</p>
-            <p className={`text-sm sm:text-base font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(totalProfit14d)}</p>
-          </div>
-        </div>
-        <div className={`${cardClass} flex items-center gap-3`}>
-          <div className={`p-2.5 rounded-xl bg-red-500/10`}><CreditCard className="w-5 h-5 text-red-400" /></div>
-          <div>
-            <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Outstanding</p>
-            <p className={`text-sm sm:text-base font-bold text-red-400`}>{formatCurrency(totalOutstanding + customerOutstanding)}</p>
-          </div>
-        </div>
-        <div className={`${cardClass} flex items-center gap-3`}>
-          <div className={`p-2.5 rounded-xl bg-amber-500/10`}><Truck className="w-5 h-5 text-amber-400" /></div>
-          <div>
-            <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Supplier Payable</p>
-            <p className={`text-sm sm:text-base font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(supplierOutstanding)}</p>
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════ REVENUE CHART + CATEGORY ═══════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
-        {/* Revenue Chart */}
-        <div className={`${cardClass} lg:col-span-2`}>
-          <div className="flex items-center justify-between mb-4">
-            <h3 className={`text-lg font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Revenue & Profit (14 Days)</h3>
-            <div className="flex items-center gap-4">
-              <div className="flex items-center gap-1.5">
-                <span className={`w-3 h-3 rounded-full ${theme === 'dark' ? 'bg-white' : 'bg-brand-900'}`} />
-                <span className={`text-xs ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>Revenue</span>
-              </div>
-              <div className="flex items-center gap-1.5">
-                <span className={`w-3 h-3 rounded-full ${theme === 'dark' ? 'bg-neutral-500' : 'bg-neutral-400'}`} />
-                <span className={`text-xs ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>Profit</span>
-              </div>
-            </div>
-          </div>
-          <div className="h-52 sm:h-64">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={chartData}>
-                <defs>
-                  <linearGradient id="dashGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="0%" stopColor={theme === 'dark' ? '#fff' : '#171717'} stopOpacity={0.08} />
-                    <stop offset="100%" stopColor={theme === 'dark' ? '#fff' : '#171717'} stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#262626' : '#e5e5e5'} />
-                <XAxis dataKey="date" tick={{ fontSize: 10, fill: theme === 'dark' ? '#737373' : '#a3a3a3' }} />
-                <YAxis tick={{ fontSize: 10, fill: theme === 'dark' ? '#737373' : '#a3a3a3' }} tickFormatter={v => `${(v / 1000).toFixed(0)}K`} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(value: number, name: string) => [formatCurrency(value), name === 'revenue' ? 'Revenue' : 'Profit']} />
-                <Area type="monotone" dataKey="revenue" stroke={theme === 'dark' ? '#fff' : '#171717'} strokeWidth={2} fill="url(#dashGrad)" />
-                <Area type="monotone" dataKey="profit" stroke={theme === 'dark' ? '#737373' : '#a3a3a3'} strokeWidth={2} fill="none" strokeDasharray="4 4" />
-              </AreaChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Category Revenue Bars */}
-        <div className={cardClass}>
-          <h3 className={`text-lg font-semibold mb-4 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Category Revenue</h3>
-          <div className="space-y-3">
-            {categoryRevenue.slice(0, 6).map((c, i) => (
-              <div key={i}>
-                <div className="flex items-center justify-between mb-1">
-                  <span className={`text-xs ${theme === 'dark' ? 'text-neutral-300' : 'text-gray-600'}`}>{c.name}</span>
-                  <span className={`text-xs font-medium ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`}>{c.percentage}%</span>
-                </div>
-                <div className={`h-2 rounded-full overflow-hidden ${theme === 'dark' ? 'bg-neutral-800' : 'bg-gray-100'}`}>
-                  <div className={`h-full rounded-full transition-all duration-500 ${theme === 'dark' ? 'bg-white' : 'bg-brand-900'}`} style={{ width: `${c.percentage}%` }} />
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════ MIDDLE ROW: INVOICES + PRODUCTS + CUSTOMERS ═══════ */}
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 lg:gap-6">
-        {/* Recent Invoices */}
-        <div className={cardClass}>
-          <div className="flex items-center justify-between mb-4">
-            <h3 className={`text-base font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Recent Invoices</h3>
-            <span className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{paidInvoices.length} paid</span>
-          </div>
-          <div className="space-y-2">
-            {recentInvoices.map(inv => (
-              <div key={inv.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
-                theme === 'dark' ? 'hover:bg-neutral-800/40' : 'hover:bg-gray-50'
-              }`}>
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                  inv.status === 'paid' ? 'bg-green-500/10 text-green-500'
-                  : inv.status === 'partial' ? 'bg-amber-500/10 text-amber-500'
-                  : 'bg-red-500/10 text-red-400'
-                }`}>
-                  {inv.invoiceNumber.replace('INV-', '#')}
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{inv.customerName}</p>
-                  <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{new Date(inv.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })}</p>
-                </div>
-                <div className="text-right">
-                  <p className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(inv.total)}</p>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                    inv.status === 'paid' ? 'bg-green-500/10 text-green-500'
-                    : inv.status === 'partial' ? 'bg-amber-500/10 text-amber-500'
-                    : inv.status === 'pending' ? 'bg-red-500/10 text-red-400'
-                    : 'bg-neutral-500/10 text-neutral-500'
-                  }`}>{inv.status}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        {/* Top Products */}
-        <div className={cardClass}>
-          <h3 className={`text-base font-semibold mb-4 ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Top Selling Products</h3>
-          <div className="h-52">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={topSellingProducts} layout="vertical">
-                <CartesianGrid strokeDasharray="3 3" stroke={theme === 'dark' ? '#262626' : '#e5e5e5'} />
-                <XAxis type="number" tick={{ fontSize: 9, fill: theme === 'dark' ? '#737373' : '#a3a3a3' }} tickFormatter={v => `${(v / 1000).toFixed(0)}K`} />
-                <YAxis dataKey="name" type="category" width={80} tick={{ fontSize: 8, fill: theme === 'dark' ? '#a3a3a3' : '#525252' }} />
-                <Tooltip contentStyle={tooltipStyle} formatter={(value: number) => [formatCurrency(value)]} />
-                <Bar dataKey="revenue" fill={theme === 'dark' ? '#ffffff' : '#171717'} radius={[0, 6, 6, 0]} name="Revenue" />
-              </BarChart>
-            </ResponsiveContainer>
-          </div>
-        </div>
-
-        {/* Top Customers */}
-        <div className={cardClass}>
-          <div className="flex items-center justify-between mb-4">
-            <h3 className={`text-base font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Top Customers</h3>
-            <span className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{activeCustomers} active</span>
-          </div>
-          <div className="space-y-2">
-            {topCustomersBySpend.map((c, i) => (
-              <div key={c.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
-                theme === 'dark' ? 'hover:bg-neutral-800/40' : 'hover:bg-gray-50'
-              }`}>
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                  theme === 'dark' ? 'bg-neutral-800 text-white' : 'bg-gray-100 text-gray-700'
-                }`}>#{i + 1}</div>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{c.name}</p>
-                  <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>
-                    {c.customerType}
-                    {c.outstandingBalance > 0 && <span className="text-red-400 ml-1.5">Owes {formatCurrency(c.outstandingBalance)}</span>}
-                  </p>
-                </div>
-                <p className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(c.totalSpent)}</p>
-              </div>
-            ))}
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════ WEB ORDERS WIDGET ═══════ */}
-      {webOrders.length > 0 && (
-        <div className={cardClass}>
-          <div className="flex items-center gap-2 mb-4">
-            <Package className="w-5 h-5 text-purple-400" />
-            <h3 className={`text-base font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Recent Web Orders</h3>
-          </div>
-          <div className="space-y-2">
-            {webOrders.map((o: any) => (
-              <div key={o.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${theme === 'dark' ? 'hover:bg-neutral-800/40' : 'hover:bg-gray-50'}`}>
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${theme === 'dark' ? 'bg-neutral-800 text-white' : 'bg-gray-100 text-gray-700'}`}>#{o.id}</div>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{o.customerName}</p>
-                  <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{new Date(o.createdAt).toLocaleDateString('en-GB', { day: '2-digit', month: 'short' })} · {o.items?.length || 0} items</p>
-                </div>
-                <div className="text-right">
-                  <p className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(o.totalAmount)}</p>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${
-                    o.status === 'DELIVERED' ? 'bg-green-500/10 text-green-500'
-                    : o.status === 'SHIPPED' ? 'bg-blue-500/10 text-blue-500'
-                    : o.status === 'PROCESSING' ? 'bg-amber-500/10 text-amber-500'
-                    : o.status === 'PAYMENT_REVIEW' || o.status === 'PENDING_RECEIPT' ? 'bg-purple-500/10 text-purple-500'
-                    : 'bg-neutral-500/10 text-neutral-500'
-                  }`}>{o.status?.replace('_', ' ')}</span>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* ═══════ BOTTOM ROW: STOCK ALERTS + SUPPLIERS ═══════ */}
+      {/* ═══════ MAIN GRID: Recent Orders + Inventory Alerts ═══════ */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 lg:gap-6">
-        {/* Low Stock Alerts */}
+        {/* Left: Recent Orders Quick-View */}
         <div className={cardClass}>
-          <div className="flex items-center gap-2 mb-4">
-            <AlertTriangle className="w-5 h-5 text-amber-400" />
-            <h3 className={`text-base font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Stock Alerts</h3>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <ShoppingBag className={`w-5 h-5 ${dark ? 'text-neutral-400' : 'text-gray-500'}`} />
+              <h3 className={`text-base font-semibold ${dark ? 'text-white' : 'text-gray-900'}`}>Recent Orders</h3>
+            </div>
+            <NavLink
+              to="/system/orders"
+              className={`text-xs font-medium flex items-center gap-1 transition-all ${
+                dark ? 'text-neutral-400 hover:text-white' : 'text-gray-500 hover:text-gray-900'
+              }`}
+            >
+              View All <Eye className="w-3 h-3" />
+            </NavLink>
+          </div>
+          {recentOrders.length === 0 ? (
+            <p className={`text-sm py-6 text-center ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>No recent orders</p>
+          ) : (
+            <div className="overflow-x-auto -mx-3 sm:-mx-5 px-3 sm:px-5">
+              <table className="w-full min-w-[400px]">
+                <thead>
+                  <tr className={dark ? 'border-b border-neutral-800' : 'border-b border-gray-200'}>
+                    {['Order ID', 'Customer', 'Amount', 'Status', ''].map(h => (
+                      <th key={h} className={`px-3 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider ${dark ? 'text-neutral-500' : 'text-gray-500'}`}>{h}</th>
+                    ))}
+                  </tr>
+                </thead>
+                <tbody>
+                  {recentOrders.map(order => (
+                    <tr key={order.id} className={`${dark ? 'border-b border-neutral-800/50 hover:bg-neutral-800/30' : 'border-b border-gray-100 hover:bg-gray-50'} transition-colors`}>
+                      <td className={`px-3 py-2.5 text-sm font-mono font-medium ${dark ? 'text-white' : 'text-gray-900'}`}>#{order.id}</td>
+                      <td className={`px-3 py-2.5 text-sm ${dark ? 'text-neutral-300' : 'text-gray-700'}`}>{order.customerName}</td>
+                      <td className={`px-3 py-2.5 text-sm font-semibold ${dark ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(order.totalAmount)}</td>
+                      <td className="px-3 py-2.5">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-medium border ${
+                          STATUS_COLORS[order.status] || 'bg-neutral-500/10 text-neutral-500'
+                        } ${dark ? 'border-transparent' : ''}`}>
+                          <span className="w-1 h-1 rounded-full bg-current" />
+                          {STATUS_LABELS[order.status] || order.status?.replace('_', ' ')}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2.5">
+                        <NavLink
+                          to={`/system/invoices`}
+                          className={`text-xs font-medium px-2 py-1 rounded-lg transition-all ${
+                            dark ? 'text-neutral-400 hover:text-white hover:bg-neutral-800' : 'text-gray-500 hover:text-gray-700 hover:bg-gray-100'
+                          }`}
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                        </NavLink>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </div>
+
+        {/* Right: Inventory Alerts */}
+        <div className={cardClass}>
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className={`w-5 h-5 ${lowStockItemsCount > 0 ? 'text-red-400' : dark ? 'text-neutral-400' : 'text-gray-500'}`} />
+              <h3 className={`text-base font-semibold ${dark ? 'text-white' : 'text-gray-900'}`}>Inventory Alerts</h3>
+            </div>
+            <span className={`text-xs ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>
+              {lowStockItemsCount > 0 ? `${lowStockItemsCount} items low` : 'All stocked'}
+            </span>
           </div>
           {lowStockProducts.length === 0 ? (
-            <p className={`text-sm ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>All products are well-stocked.</p>
+            <div className="flex flex-col items-center justify-center py-8 gap-2">
+              <Package className={`w-10 h-10 ${dark ? 'text-neutral-700' : 'text-gray-200'}`} />
+              <p className={`text-sm ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>All products are well-stocked</p>
+            </div>
           ) : (
             <div className="space-y-2">
               {lowStockProducts.map(p => (
-                <div key={p.id} className={`flex items-center gap-3 p-2.5 rounded-xl ${
-                  theme === 'dark' ? 'bg-neutral-800/30' : 'bg-gray-50'
+                <div key={p.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
+                  dark ? 'bg-neutral-800/30 hover:bg-neutral-800/50' : 'bg-gray-50 hover:bg-gray-100'
                 }`}>
-                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                    p.status === 'out-of-stock' ? 'bg-red-500/10' : 'bg-amber-500/10'
+                  <div className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                    p.stock === 0 ? 'bg-red-500/10' : 'bg-amber-500/10'
                   }`}>
-                    <Package className={`w-4 h-4 ${p.status === 'out-of-stock' ? 'text-red-400' : 'text-amber-400'}`} />
+                    <Package className={`w-4 h-4 ${p.stock === 0 ? 'text-red-400' : 'text-amber-400'}`} />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <p className={`text-sm font-medium truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{p.name}</p>
-                    <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{p.sku} · Threshold: {p.lowStockThreshold}</p>
+                    <p className={`text-sm font-medium truncate ${dark ? 'text-white' : 'text-gray-900'}`}>{p.productName}</p>
+                    <p className={`text-xs ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>{p.color} · {p.size} · {p.sku}</p>
                   </div>
-                  <div className="text-right">
-                    <p className={`text-lg font-bold ${p.stock === 0 ? 'text-red-400' : 'text-amber-400'}`}>{p.stock}</p>
-                    <span className={`text-[10px] ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>units</span>
+                  <div className="text-right flex-shrink-0">
+                    <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[11px] font-bold ${
+                      p.stock === 0
+                        ? 'bg-red-500/10 text-red-400'
+                        : 'bg-amber-500/10 text-amber-400'
+                    }`}>
+                      {p.stock === 0 ? 'OUT' : `Only ${p.stock}`}
+                    </span>
                   </div>
                 </div>
               ))}
             </div>
           )}
-          <div className={`mt-4 grid grid-cols-3 gap-2`}>
-            <div className={`p-2.5 rounded-lg text-center ${theme === 'dark' ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
-              <p className="text-green-500 text-lg font-bold">{inStock}</p>
-              <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>In Stock</p>
+          {/* Quick Stats Row */}
+          <div className={`mt-4 grid grid-cols-2 gap-3`}>
+            <div className={`p-3 rounded-xl ${dark ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
+              <p className={`text-xs ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>Pending Orders</p>
+              <p className={`text-xl font-bold flex items-center gap-2 ${dark ? 'text-white' : 'text-gray-900'}`}>
+                {pendingOrdersCount}
+                {pendingOrdersCount > 0 && <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />}
+              </p>
             </div>
-            <div className={`p-2.5 rounded-lg text-center ${theme === 'dark' ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
-              <p className="text-amber-400 text-lg font-bold">{lowStock}</p>
-              <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Low</p>
-            </div>
-            <div className={`p-2.5 rounded-lg text-center ${theme === 'dark' ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
-              <p className="text-red-400 text-lg font-bold">{outOfStock}</p>
-              <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Out</p>
+            <div className={`p-3 rounded-xl ${dark ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
+              <p className={`text-xs ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>Revenue Today</p>
+              <p className={`text-xl font-bold ${dark ? 'text-white' : 'text-gray-900'}`}>{formatCurrency(todayRevenue)}</p>
             </div>
           </div>
         </div>
+      </div>
 
-        {/* Suppliers Overview */}
-        <div className={cardClass}>
-          <div className="flex items-center gap-2 mb-4">
-            <Truck className={`w-5 h-5 ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`} />
-            <h3 className={`text-base font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Supplier Overview</h3>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3 mb-4">
-            <div className={`p-3 rounded-xl ${theme === 'dark' ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
-              <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Active Suppliers</p>
-              <p className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{activeSuppliers}</p>
-            </div>
-            <div className={`p-3 rounded-xl ${theme === 'dark' ? 'bg-neutral-800/50' : 'bg-gray-50'}`}>
-              <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Avg Rating</p>
-              <p className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>
-                <Star className="w-4 h-4 text-amber-400 inline mr-1" />{avgRating.toFixed(1)}
-              </p>
-            </div>
-          </div>
-
-          <div className="space-y-2">
-            {[...mockSuppliers].sort((a, b) => b.outstandingBalance - a.outstandingBalance).slice(0, 4).map(s => (
-              <div key={s.id} className={`flex items-center gap-3 p-2.5 rounded-xl transition-all ${
-                theme === 'dark' ? 'hover:bg-neutral-800/40' : 'hover:bg-gray-50'
-              }`}>
-                <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
-                  s.status === 'active' ? theme === 'dark' ? 'bg-neutral-800' : 'bg-gray-100' : 'bg-neutral-500/10'
-                }`}>
-                  <Truck className={`w-4 h-4 ${theme === 'dark' ? 'text-neutral-400' : 'text-gray-500'}`} />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <p className={`text-sm font-medium truncate ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{s.name}</p>
-                  <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{s.supplyType} · {s.totalOrders} orders</p>
-                </div>
-                <div className="text-right">
-                  <p className={`text-sm font-semibold ${s.outstandingBalance > 0 ? 'text-red-400' : theme === 'dark' ? 'text-green-400' : 'text-green-600'}`}>
-                    {formatCurrency(s.outstandingBalance)}
-                  </p>
-                  <div className="flex items-center gap-0.5">
-                    {Array.from({ length: 5 }, (_, i) => (
-                      <Star key={i} className={`w-2.5 h-2.5 ${i < s.rating ? 'text-amber-400 fill-amber-400' : theme === 'dark' ? 'text-neutral-700' : 'text-gray-200'}`} />
-                    ))}
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          {supplierOutstanding > 0 && (
-            <div className={`mt-4 p-3 rounded-xl border ${theme === 'dark' ? 'bg-red-500/5 border-red-500/20' : 'bg-red-50 border-red-200'}`}>
-              <p className={`text-xs ${theme === 'dark' ? 'text-red-400' : 'text-red-600'}`}>
-                Total payable to suppliers: <span className="font-bold">{formatCurrency(supplierOutstanding)}</span>
-              </p>
-            </div>
+      {/* ═══════ SUMMARY FOOTER ═══════ */}
+      <div className={`${cardClass} flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3`}>
+        <div className="flex items-center gap-2">
+          <BarChart3 className={`w-4 h-4 ${dark ? 'text-neutral-500' : 'text-gray-400'}`} />
+          <span className={`text-xs ${dark ? 'text-neutral-500' : 'text-gray-400'}`}>
+            Data refreshes on page load &middot; Real-time via Socket.io
+          </span>
+        </div>
+        <div className="flex items-center gap-3 text-xs">
+          {revenueGrowth >= 0 ? (
+            <span className="text-emerald-500 flex items-center gap-1">
+              <TrendingUp className="w-3 h-3" /> {revenueGrowth.toFixed(1)}% growth
+            </span>
+          ) : (
+            <span className="text-red-400 flex items-center gap-1">
+              <TrendingUp className="w-3 h-3" /> {Math.abs(revenueGrowth).toFixed(1)}% decline
+            </span>
           )}
+          <span className={`${dark ? 'text-neutral-500' : 'text-gray-400'}`}>
+            {pendingOrdersCount} pending / {lowStockItemsCount} low stock
+          </span>
         </div>
       </div>
     </div>

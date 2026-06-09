@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { NavLink, useLocation, useNavigate } from 'react-router-dom';
 import { useTheme } from '../contexts/ThemeContext';
+import { useAuth } from '../contexts/AuthContext';
 import {
   LayoutDashboard,
   ShoppingBag,
@@ -19,10 +20,10 @@ import {
   ChevronLeft,
   ChevronRight,
   LogOut,
-  Bell,
-  Search,
   Globe,
   ExternalLink,
+  User,
+  Shield,
 } from 'lucide-react';
 
 interface NavItem {
@@ -46,8 +47,11 @@ const navItems: NavItem[] = [
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { theme, toggleTheme } = useTheme();
+  const { user, logout, isAdmin } = useAuth();
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profileRef = useRef<HTMLDivElement>(null);
   const location = useLocation();
   const navigate = useNavigate();
 
@@ -55,6 +59,26 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     if (n.path === '/system') return location.pathname === '/system';
     return location.pathname.startsWith(n.path);
   });
+
+  // Close profile dropdown on outside click
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
+        setProfileOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  const initials = user?.name
+    ? user.name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2)
+    : 'AD';
 
   return (
     <div className={`min-h-screen flex overflow-x-hidden ${theme === 'dark' ? 'bg-brand-950 text-white' : 'bg-gray-50 text-gray-900'}`}>
@@ -167,7 +191,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             <div className={`absolute bottom-0 left-0 right-0 p-4 space-y-2 ${
               theme === 'dark' ? 'border-t border-neutral-800/60' : 'border-t border-gray-200'
             }`}>
-              {/* Back to Website — mobile only */}
               <NavLink
                 to="/"
                 onClick={() => setSidebarOpen(false)}
@@ -181,9 +204,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 <span>Back to Website</span>
                 <ExternalLink className="w-3.5 h-3.5 ml-auto opacity-50" />
               </NavLink>
-              <button className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
-                theme === 'dark' ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50'
-              }`}>
+              <button
+                onClick={() => { setSidebarOpen(false); handleLogout(); }}
+                className={`flex items-center gap-3 w-full px-3 py-2.5 rounded-xl text-sm font-medium transition-all ${
+                  theme === 'dark' ? 'text-red-400 hover:bg-red-500/10' : 'text-red-500 hover:bg-red-50'
+                }`}
+              >
                 <LogOut className="w-5 h-5" />
                 <span>Sign Out</span>
               </button>
@@ -232,25 +258,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <ExternalLink className="w-3 h-3 opacity-50" />
             </button>
 
-            {/* Search */}
-            <button className={`hidden sm:flex p-2.5 rounded-xl border transition-all ${
-              theme === 'dark'
-                ? 'bg-neutral-900/50 border-neutral-800 hover:bg-neutral-800 text-neutral-400'
-                : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-500'
-            }`}>
-              <Search className="w-4 h-4" />
-            </button>
-
-            {/* Notifications */}
-            <button className={`hidden sm:flex p-2.5 rounded-xl border transition-all relative ${
-              theme === 'dark'
-                ? 'bg-neutral-900/50 border-neutral-800 hover:bg-neutral-800 text-neutral-400'
-                : 'bg-white border-gray-200 hover:bg-gray-50 text-gray-500'
-            }`}>
-              <Bell className="w-4 h-4" />
-              <span className="absolute -top-1 -right-1 w-4 h-4 bg-red-500 rounded-full text-[10px] text-white flex items-center justify-center font-bold">3</span>
-            </button>
-
             {/* Theme Toggle */}
             <button
               onClick={toggleTheme}
@@ -263,17 +270,68 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               {theme === 'dark' ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
             </button>
 
-            {/* Profile */}
-            <div className={`flex items-center gap-2 pl-2 ml-1 ${
-              theme === 'dark' ? 'border-l border-neutral-800' : 'border-l border-gray-200'
-            }`}>
-              <div className="w-8 h-8 rounded-full bg-gradient-to-br from-neutral-700 to-neutral-900 flex items-center justify-center text-white font-semibold text-xs">
-                AD
-              </div>
-              <div className="hidden sm:block">
-                <p className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>Admin</p>
-                <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>Manager</p>
-              </div>
+            {/* Profile Dropdown */}
+            <div className="relative" ref={profileRef}>
+              <button
+                onClick={() => setProfileOpen(!profileOpen)}
+                className={`flex items-center gap-2 pl-2 ml-1 border-l transition-all cursor-pointer ${
+                  theme === 'dark' ? 'border-neutral-800' : 'border-gray-200'
+                } ${profileOpen ? (theme === 'dark' ? 'opacity-80' : 'opacity-80') : ''}`}
+              >
+                <div className="w-8 h-8 rounded-full bg-gradient-to-br from-emerald-600 to-emerald-800 flex items-center justify-center text-white font-semibold text-xs">
+                  {initials}
+                </div>
+                <div className="hidden sm:block text-left">
+                  <p className={`text-sm font-medium ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{user?.name || 'Admin'}</p>
+                  <p className={`text-xs ${theme === 'dark' ? 'text-neutral-500' : 'text-gray-400'}`}>{user?.role || 'Manager'}</p>
+                </div>
+              </button>
+
+              {/* Dropdown Menu */}
+              {profileOpen && (
+                <div className={`absolute right-0 mt-2 w-52 border rounded-xl shadow-2xl z-50 overflow-hidden ${
+                  theme === 'dark' ? 'bg-zinc-950 border-zinc-800' : 'bg-white border-gray-200'
+                }`}>
+                  {/* Header */}
+                  <div className={`px-4 py-3 border-b ${theme === 'dark' ? 'border-zinc-800' : 'border-gray-200'}`}>
+                    <p className={`text-sm font-semibold ${theme === 'dark' ? 'text-white' : 'text-gray-900'}`}>{user?.name || 'Admin'}</p>
+                    <p className={`text-xs mt-0.5 ${theme === 'dark' ? 'text-zinc-500' : 'text-gray-400'}`}>{user?.email || 'admin@everfit.com'}</p>
+                  </div>
+                  {/* Menu Items */}
+                  <div className="py-1">
+                    <button
+                      onClick={() => { setProfileOpen(false); navigate('/system/settings'); }}
+                      className={`flex items-center gap-3 w-full px-4 py-2.5 text-sm transition-all ${
+                        theme === 'dark' ? 'text-zinc-300 hover:bg-zinc-800' : 'text-gray-700 hover:bg-gray-50'
+                      }`}
+                    >
+                      <User className="w-4 h-4" />
+                      <span>Profile Settings</span>
+                    </button>
+                    {isAdmin && (
+                      <button
+                        onClick={() => { setProfileOpen(false); navigate('/system/settings'); }}
+                        className={`flex items-center gap-3 w-full px-4 py-2.5 text-sm transition-all ${
+                          theme === 'dark' ? 'text-zinc-300 hover:bg-zinc-800' : 'text-gray-700 hover:bg-gray-50'
+                        }`}
+                      >
+                        <Shield className="w-4 h-4" />
+                        <span>Staff Management</span>
+                      </button>
+                    )}
+                  </div>
+                  {/* Sign Out */}
+                  <div className={`border-t ${theme === 'dark' ? 'border-zinc-800' : 'border-gray-200'}`}>
+                    <button
+                      onClick={() => { setProfileOpen(false); handleLogout(); }}
+                      className="flex items-center gap-3 w-full px-4 py-2.5 text-sm text-red-400 hover:bg-red-500/10 transition-all"
+                    >
+                      <LogOut className="w-4 h-4" />
+                      <span>Sign Out</span>
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
         </header>
